@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <!-- <script src="./web-ifc.js"></script>
+        <script src="./web-ifc-api.js"></script> -->
+</head>
+
+<body>
+    test 123
+</body>
+<script type="module">
+    import {
+            IfcAPI,
+            LogLevel,
+            ms,
+            Schemas,
+            IFCUNITASSIGNMENT,
+            IFCAXIS2PLACEMENT3D,
+            IFCLENGTHMEASURE,
+            IFCCARTESIANPOINT,
+            IFCAXIS2PLACEMENT2D,
+            IFCCIRCLEPROFILEDEF,
+            IFCDIRECTION,
+            IFCREAL,
+            IFCPOSITIVELENGTHMEASURE,
+            IFCCOLUMN,
+            IFCEXTRUDEDAREASOLID,
+            IFCGLOBALLYUNIQUEID,
+            IFCLABEL,
+            IFCIDENTIFIER } from './web-ifc-api.js';
+
+            const scaleFactor = 50; // 放大 50 倍
+            const outputFileName = 'example.obj';
+
+            function applyTransformation(matrix, x, y, z) {
+                const xNew = (matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) * scaleFactor;
+                const yNew = (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) * scaleFactor;
+                const zNew = (matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]) * scaleFactor;
+                return [xNew, yNew, zNew];
+            }
+
+            function ifcGeometryToBuffer(color, vertexData, indexData, transform) {
+                let posFloats = new Float32Array(vertexData.length / 2);
+                let normFloats = new Float32Array(vertexData.length / 2);
+                let colorFloats = new Float32Array(vertexData.length / 2);
+
+                for (let i = 0; i < vertexData.length; i += 6) {
+                    const [x, y, z] = applyTransformation(transform, vertexData[i], vertexData[i + 1], vertexData[i + 2]);
+                    posFloats[i / 2 + 0] = x;
+                    posFloats[i / 2 + 1] = y;
+                    posFloats[i / 2 + 2] = z;
+
+                    const [nx, ny, nz] = applyTransformation(transform, vertexData[i + 3], vertexData[i + 4], vertexData[i + 5]);
+                    normFloats[i / 2 + 0] = nx;
+                    normFloats[i / 2 + 1] = ny;
+                    normFloats[i / 2 + 2] = nz;
+
+                    colorFloats[i / 2 + 0] = color.x;
+                    colorFloats[i / 2 + 1] = color.y;
+                    colorFloats[i / 2 + 2] = color.z;
+                }
+
+                return {
+                    posFloats,
+                    normFloats,
+                    colorFloats,
+                };
+            }    
+
+            function downloadFile(outputFileName, content) {
+                const blob = new Blob([content], { type: 'text/plain' }); // Create a Blob from the content
+                const url = URL.createObjectURL(blob); // Create an object URL
+
+                const a = document.createElement('a'); // Create a temporary anchor element
+                a.href = url;
+                a.download = outputFileName; // Set the download attribute with the desired file name
+
+                document.body.appendChild(a); // Append the anchor to the DOM
+                a.click(); // Trigger the download by simulating a click event
+
+                // Clean up
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url); // Revoke the object URL to free up memory
+            }
+
+            async function convertIfcToObj(ifcFilePath, outputFilePath) {
+                let ifcAPI = new IfcAPI();
+                ifcAPI.SetWasmPath("")
+                // ifcAPI.Dispose();
+                await ifcAPI.Init();
+                const response = await fetch(ifcFilePath);
+                const arrayBuffer = await response.arrayBuffer();
+                const data = new Uint8Array(arrayBuffer);
+                const modelID = ifcAPI.OpenModel(data, { COORDINATE_TO_ORIGIN: true }); 
+                let objContent = '';
+                let vertexOffset = 0;
+                ifcAPI.StreamAllMeshes(modelID, (mesh, index) => {
+                    const placedGeometries = mesh.geometries;
+                    for (let i = 0; i < placedGeometries.size(); i++) {
+                        const placedGeometry = placedGeometries.get(i);
+                        const geometry = ifcAPI.GetGeometry(modelID, placedGeometry.geometryExpressID);
+                        const verts = ifcAPI.GetVertexArray(geometry.GetVertexData(), geometry.GetVertexDataSize());
+                        const indices = ifcAPI.GetIndexArray(geometry.GetIndexData(), geometry.GetIndexDataSize());
+                        const bufferGeometry = ifcGeometryToBuffer(placedGeometry.color, verts, indices, placedGeometry.flatTransformation);
+
+                        if (verts.length === 0 || indices.length === 0) {
+                            continue;
+                        }
+
+                        objContent += `o mesh_${index}_${i}\n`;
+
+                        const posFloats = bufferGeometry.posFloats;
+                        for (let j = 0; j < posFloats.length; j += 3) {
+                            objContent += `v ${posFloats[j]} ${posFloats[j + 1]} ${posFloats[j + 2]}\n`;
+                        }
+
+                        const normFloats = bufferGeometry.normFloats;
+                        for (let j = 0; j < normFloats.length; j += 3) {
+                            objContent += `vn ${normFloats[j]} ${normFloats[j + 1]} ${normFloats[j + 2]}\n`;
+                        }
+
+                        for (let j = 0; j < indices.length; j += 3) {
+                            objContent += `f ${indices[j] + 1 + vertexOffset} ${indices[j + 1] + 1 + vertexOffset} ${indices[j + 2] + 1 + vertexOffset}\n`;
+                        }
+
+                        vertexOffset += posFloats.length / 3;
+                        geometry.delete();
+                    }
+                });
+                downloadFile(outputFilePath, objContent)
+                ifcAPI.CloseModel(modelID);
+            }
+
+            convertIfcToObj('./example.ifc', 'example.obj')
+            .then(() => console.log('Conversion complete'))
+            .catch(error => console.error('Conversion failed:', error));
+
+    </script>
+<script>
+    // const WebIFC = require("./web-ifc-api.js");
+</script>
+
+</html>
