@@ -1,0 +1,5 @@
+node_modules/
+*.ifc
+*.obj
+*.mtl
+package-lock.json
